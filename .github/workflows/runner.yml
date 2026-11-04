@@ -1,0 +1,71 @@
+name: Runner
+run-name: runner-${{ inputs.tag }}
+
+# Registers a single ephemeral (JIT) self-hosted runner on this hosted machine and
+# hands it one job, then exits. The launcher (committed under launcher/dist) does the
+# work, so each step is one word; all job logic, secrets and artifacts live in the
+# repository that queued the job, not here.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      jit_enc:
+        required: true
+        type: string
+      timeout:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  runner:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout) }}
+    steps:
+      # Download the matching launcher at this commit and put it on PATH; no checkout,
+      # so the workspace keeps no .git.
+      - name: Install
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAUNCHER_PATH: launcher/dist/launcher-windows-amd64.exe
+        run: |
+          $file = Join-Path $env:RUNNER_TEMP "bootstrap-launcher-$env:GITHUB_RUN_ID.exe"
+          & curl.exe -fsSL --retry 3 -H "Authorization: Bearer $env:GH_TOKEN" -H "Accept: application/vnd.github.raw" -o $file "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/contents/$env:LAUNCHER_PATH`?ref=$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $file install
+          exit $LASTEXITCODE
+
+      - name: Install
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAUNCHER_PATH: launcher/dist/launcher-linux-amd64
+        run: |
+          file="$RUNNER_TEMP/bootstrap-launcher-$GITHUB_RUN_ID"
+          curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
+            -o "$file" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/contents/$LAUNCHER_PATH?ref=$GITHUB_SHA"
+          chmod +x "$file"
+          "$file" install
+
+      # Reuse the hosted runner's own program files, or download the same version.
+      - name: Prepare
+        shell: bootstrap-launcher prepare {0}
+        run: prepare
+
+      # Read the sealed JIT config from the event file (not a step env var), decrypt it
+      # with the repo secret, and start the inner runner; its exit code is this step's.
+      - name: Run
+        shell: bootstrap-launcher run {0}
+        env:
+          RUN_KEY: ${{ secrets.RUN_KEY }}
+        run: run
