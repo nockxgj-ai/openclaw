@@ -180,6 +180,7 @@ jobs:
           try:
               git("push")
           except subprocess.CalledProcessError:
-              git("pull", "--rebase", "origin", REF_NAME)
+              # Someone pushed meanwhile: replay the commit on top; rebase rewrites it, so it needs the same identity.
+              git("pull", "--rebase", "origin", REF_NAME, extra_env=extra)
               git("push")
           PY
